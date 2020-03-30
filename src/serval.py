@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 __author__ = 'Mathias Zechmeister'
-__version__ = '2020-02-19'
+__version__ = '2020-03-25'
 
 description = '''
 SERVAL - SpEctrum Radial Velocity AnaLyser (%s)
@@ -982,6 +982,12 @@ def serval():
    ################################
    ### READ FITS FILES ############
    ################################
+   if nspec > 700:
+      ulimit = resource.getrlimit(resource.RLIMIT_OFILE)
+      if ulimit[0] < 4096:
+         print "Many files! Adapting ulimit from %s to (4096, 4096)." % (ulimit,)
+         resource.setrlimit(resource.RLIMIT_OFILE, (4096,4096))
+
    splist = []
    spi = None
    SN55best = 0.
@@ -1302,13 +1308,10 @@ def serval():
                bmod[n][skymsk(dopshift(redshift(sp.w, vo=sp.berv, ve=RV[n]/1000.), spt.berv))>0.01] |= flag.badT
 
                w2 = redshift(sp.w, vo=sp.berv, ve=RV[n]/1000.)   # correct also for stellar rv
-               #i0 = np.searchsorted(w2, ww[o].min()) - 1   # w2 must be oversized
-               #wt = barshift(spt.w[o,idx], spt.berv)
                i0 = np.searchsorted(w2, TPL[o].wk[0]) - 1   # w2 must be oversized
                if i0<0:
                   i0 = 0
-               #ie = np.searchsorted(w2, ww[o].max())
-               ie = np.searchsorted(w2,TPL[o].wk[-1])
+               ie = np.searchsorted(w2, TPL[o].wk[-1])
                pind, = where(bmod[n][i0:ie] == 0)
                bmod[n][:i0] |= flag.out
                bmod[n][ie:] |= flag.out
@@ -1334,13 +1337,13 @@ def serval():
                par, fmod, keep, stat = fitspec(TPL[o],
                   w2[i0:ie], sp.f[i0:ie], sp.e[i0:ie], v=0, vfix=True, keep=pind, v_step=False, clip=kapsig, nclip=nclip, deg=deg)   # RV  (in dopshift instead of v=RV; easier masking?)
                poly = calcspec(w2, *par.params, retpoly=True)
-               #gplot( w2,sp.fo/poly); ogplot( w2[i0:ie],fmod/poly[i0:ie],' w lp ps 0.5'); ogplot(ww[o], ff[o],'w l')
                wmod[n] = w2
                mod[n] = sp.f / poly   # be careful if  poly<0
                emod[n] = sp.e / poly
                if 0:# o in lookt: #o==-29:
-                  #gplot(sp.w,sp.f,poly, ',"" us 1:3,', sp.w[i0:ie],(sp.f / poly)[i0:ie], ' w l,',ww[o], ff[o], 'w l')
-                  gplot(w2,sp.f,poly, ',"" us 1:3,', w2[i0:ie],(sp.f / poly)[i0:ie], ' w l,',ww[o], ff[o], 'w l')
+                  gplot-(w2, sp.f, poly, ' t "sp.f", "" us 1:3 w l t "poly"')
+                  gplot<(w2[i0:ie][keep], sp.f[i0:ie][keep], sp.e[i0:ie][keep], 'w e')
+                  gplot+(w2[i0:ie], (sp.f / poly)[i0:ie], ' w l t "spf.f/poly",', TPL[o].wk, TPL[o].fk, ' w l t "TPL"')
                   pause(n)
               #(fmod<0) * flag.neg
             ind = (bmod&(flag.nan+flag.neg+flag.out)) == 0 # not valid
@@ -1494,7 +1497,11 @@ def serval():
             if o in lookt:
                gplot.bar(0).key("tit '%s order %s'"% (obj,o))
                gplot.mxtics().mytics().xlabel("'ln {/Symbol l}'")
-               gplot.x2label("'{/Symbol l} [A]'").x2tics().mx2tics().link('x via exp(x) inverse log(x)').xtics("nomirr")
+               # estimate a good x2tics spacing
+               i10, f10 = divmod(np.log10((np.exp(max(TPL[o].wk))-np.exp(min(TPL[o].wk)))/5), 1)
+               dx2 = [1,2,5][abs(10**f10-[1,2,5]).argmin()] * 10**i10
+               gplot.bind('f "dx2=(GPVAL_X2_MAX-GPVAL_X2_MIN)/5; i10=10**floor(log10(dx2)); dx2=dx2/i10; set x2tics i10*(dx2<1.5?1:dx2<4?2:5);        replot"')
+               gplot.x2label("'{/Symbol l} [A]'").x2tics(dx2).mx2tics().link('x via exp(x) inverse log(x)').xtics("nomirr")
                #gplot(wmod[ind],mod[ind], 1/np.sqrt(we[ind]), emod[ind], 'us 1:2:3 w e lt 2, "" us 1:2:4  w e pt 7 ps 0.5 lt 1')
                #hasflag = lambda array,flag: (array&flag)==flag
                #hasflags = lambda array,flags: [hasflag(array,flag) for flag in flags]
@@ -1822,7 +1829,6 @@ def serval():
 
                # pause()
                if o==41: pind=pind[:-9]   # @CARM_NIR?
-               #par, f2mod, keep, stat, chi2mapo = fitspec((ww[o], ff[o], kk[o]), wmod, f2, e2, v=targrv-tplrv, clip=kapsig, nclip=nclip, keep=pind, indmod=np.s_[pmin:pmax], plot=o in lookssr, deg=deg, chi2map=True)
                par, f2mod, keep, stat, chi2mapo = fitspec(TPL[o], wmod, f2, e2, v=targrv-tplrv, clip=kapsig, nclip=nclip, keep=pind, indmod=np.s_[pmin:pmax], plot=o in lookssr, deg=deg, chi2map=True)
 
                if diff_width:
@@ -1909,7 +1915,7 @@ def serval():
             clipped = np.sort(list(set(pind).difference(set(keep))))
             if len(clipped):
                b2[clipped] = flag.clip
-            if o in look or (not safemode and (abs(rvo/1000-targrv+tplrv)>rvwarn and not sp.flag) or debug>1):
+            if o in lookp or (o in look and iterate==niter) or (not safemode and (abs(rvo/1000-targrv+tplrv)>rvwarn and not sp.flag) or debug>1):
                if def_wlog: w2 = np.exp(w2)
                res = np.nan * f2
                res[pmin:pmax] = (f2[pmin:pmax]-f2mod[pmin:pmax]) / e2[pmin:pmax]  # normalised residuals
@@ -2180,8 +2186,10 @@ if __name__ == "__main__":
    # instrument specific default (see inst_*.py)
    pmin = getattr(inst, 'pmin', 300)
    pmax = getattr(inst, 'pmax', {'CARM_NIR':1800, 'ELODIE':900}.get(inst.name, 3800))
-   oset = getattr(inst, 'oset', {'HARPS':'10:71', 'HARPN':'10:', 'HPF':"[4,5,6,14,15,16,17,18]", 'CARM_VIS':'10:52', 'FEROS':'10:', 'ELODIE':'2:'}.get(inst.name,':'))
+   oset = getattr(inst, 'oset', {'HARPS':'10:71', 'HARPN':'10:', 'HPF':"[4,5,6,14,15,16,17,18]", 'FEROS':'10:', 'ELODIE':'2:'}.get(inst.name,':'))
    coset = getattr(inst, 'coset', None)
+   ofac = getattr(inst, 'ofac', 1.)
+   snmax = getattr(inst, 'snmax', 400.)
 
    default = " (default: %(default)s)."
    epilog = """\
@@ -2212,7 +2220,7 @@ if __name__ == "__main__":
                       choices=['box', 'binless', 'gauss', 'trapeze'])
    argopt('-coadd', help='coadd method'+default, default='post3',
                    choices=['post3'])
-   argopt('-coset', help='index for order in coadding (default: oset)', default=coset, type=arg2slice)
+   argopt('-coset', help='index for order in coadding (default: oset)'+default, default=coset, type=arg2slice)
    argopt('-co_excl', help='orders to exclude in coadding (default: o_excl)', type=arg2slice)
    argopt('-ckappa', help='kappa sigma (or lower and upper) clip value in coadding. Zero values for no clipping'+default, nargs='+', type=float, default=(4.,4.))
    argopt('-deg',  help='degree for background polynomial', type=int, default=3)
@@ -2233,9 +2241,9 @@ if __name__ == "__main__":
    argopt('-nclip', help='max. number of clipping iterations'+default, type=int, default=2)
    argopt('-niter', help='number of RV iterations'+default, type=int, default=2)
    argopt('-oset', help='index for order subset (e.g. 1:10, ::5)'+default, default=oset, type=arg2slice)
-   argopt('-o_excl', help='Orders to exclude (e.g. 1,10,3)', default=[], type=arg2slice)
+   argopt('-o_excl', help='Orders to exclude (e.g. 1,10,3)'+default, default=[], type=arg2slice)
    #argopt('-outmod', help='output the modelling results for each spectrum into a fits file',  choices=['ratio', 'HARPN', 'CARM_VIS', 'CARM_NIR', 'FEROS', 'FTS'])
-   argopt('-ofac', help='oversampling factor in coadding'+default, default=1., type=float)
+   argopt('-ofac', help='oversampling factor in coadding'+default, default=ofac, type=float)
    argopt('-ofacauto', help='automatic knot spacing with BIC.', action='store_true')
    argopt('-outchi', help='output of the chi2 map', nargs='?', const='_chi2map.fits')
    argopt('-outfmt', help='output format of the fits file (default: None; const: fmod err res wave)', nargs='*', choices=['wave', 'waverest', 'err', 'fmod', 'res', 'spec', 'bpmap', 'ratio'], default=None)
@@ -2251,7 +2259,7 @@ if __name__ == "__main__":
    argopt('-skippre', help='Skip pre-RVs.', action='store_true')
    argopt('-skymsk', help='Sky emission line mask ('' for no masking)'+default, default='auto', dest='skyfile')
    argopt('-snmin', help='minimum S/N (considered as not bad and used in template building)'+default, default=10, type=float)
-   argopt('-snmax', help='maximum S/N (considered as not bad and used in template building)'+default, default=400, type=float)
+   argopt('-snmax', help='maximum S/N (considered as not bad and used in template building)'+default, default=snmax, type=float)
    argopt('-tfmt', help='output format of the template. nmap is a an estimate for the number of good data points for each knot. ddspec is the second derivative for cubic spline reconstruction. (default: spec sig wave)', nargs='*', choices=['spec', 'sig', 'wave', 'nmap', 'ddspec'], default=['spec', 'sig', 'wave'])
    argopt('-tpl',  help="template filename or directory, if None or integer a template is created by coadding, where highest S/N spectrum or the filenr is used as start tpl for the pre-RVs", nargs='?')
    argopt('-tplrv', help='[km/s] template RV. By default taken from the template header and set to 0 km/s for phoe tpl.[float, "tpl", "drsspt", "drsmed", "targ", None, "auto"]', default='auto')
